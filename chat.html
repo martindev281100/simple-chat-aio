@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simple Chat Client</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #f5f5f5;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .header {
+        background-color: #4a6fa5;
+        color: white;
+        padding: 1rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+
+      .header h1 {
+        font-size: 1.5rem;
+      }
+
+      .user-info {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .status-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background-color: #ccc;
+      }
+
+      .status-indicator.connected {
+        background-color: #4caf50;
+      }
+
+      .status-indicator.disconnected {
+        background-color: #f44336;
+      }
+
+      .main-container {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      .rooms-panel {
+        width: 250px;
+        background-color: white;
+        border-right: 1px solid #ddd;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .rooms-header {
+        padding: 1rem;
+        border-bottom: 1px solid #eee;
+        font-weight: bold;
+      }
+
+      .rooms-list {
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      .room-item {
+        padding: 0.75rem 1rem;
+        cursor: pointer;
+        border-bottom: 1px solid #f0f0f0;
+        transition: background-color 0.2s;
+      }
+
+      .room-item:hover {
+        background-color: #f0f0f0;
+      }
+
+      .room-item.active {
+        background-color: #e3f2fd;
+        border-left: 3px solid #4a6fa5;
+      }
+
+      .create-room-btn {
+        margin: 1rem;
+        padding: 0.5rem;
+        background-color: #4a6fa5;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+
+      .create-room-btn:hover {
+        background-color: #3a5a8c;
+      }
+
+      .chat-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background-color: white;
+      }
+
+      .chat-header {
+        padding: 1rem;
+        border-bottom: 1px solid #eee;
+        background-color: #fafafa;
+      }
+
+      .messages-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem;
+      }
+
+      .message {
+        margin-bottom: 1rem;
+        padding: 0.5rem;
+        border-radius: 8px;
+        max-width: 80%;
+      }
+
+      .message.own {
+        background-color: #e3f2fd;
+        margin-left: auto;
+        text-align: right;
+      }
+
+      .message.system {
+        background-color: #f5f5f5;
+        text-align: center;
+        font-style: italic;
+        color: #666;
+        max-width: 100%;
+      }
+
+      .message-info {
+        font-size: 0.8rem;
+        color: #666;
+        margin-bottom: 0.25rem;
+      }
+
+      .message-content {
+        word-wrap: break-word;
+      }
+
+      .message-input-container {
+        display: flex;
+        padding: 1rem;
+        border-top: 1px solid #eee;
+        background-color: #fafafa;
+      }
+
+      .message-input {
+        flex: 1;
+        padding: 0.75rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 1rem;
+      }
+
+      .send-btn {
+        margin-left: 0.5rem;
+        padding: 0.75rem 1.5rem;
+        background-color: #4a6fa5;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+
+      .send-btn:hover:not(:disabled) {
+        background-color: #3a5a8c;
+      }
+
+      .send-btn:disabled {
+        background-color: #ccc;
+        cursor: not-allowed;
+      }
+
+      .connection-status {
+        padding: 0.5rem 1rem;
+        text-align: center;
+        font-size: 0.9rem;
+      }
+
+      .connection-status.connected {
+        color: #4caf50;
+      }
+
+      .connection-status.disconnected {
+        color: #f44336;
+      }
+
+      .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+      }
+
+      .modal-content {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background-color: white;
+        padding: 2rem;
+        border-radius: 8px;
+        width: 90%;
+        max-width: 400px;
+      }
+
+      .modal-header {
+        margin-bottom: 1rem;
+      }
+
+      .form-group {
+        margin-bottom: 1rem;
+      }
+
+      .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+      }
+
+      .form-group input {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+
+      .modal-buttons {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+      }
+
+      .btn {
+        padding: 0.5rem 1rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .btn-primary {
+        background-color: #4a6fa5;
+        color: white;
+      }
+
+      .btn-secondary {
+        background-color: #ddd;
+      }
+
+      /* Reaction Styles */
+      .message-reactions {
+        margin-top: 0.5rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+      }
+
+      .reaction-item {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.4rem;
+        background-color: #f0f0f0;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: background-color 0.2s;
+        border: 1px solid transparent;
+      }
+
+      .reaction-item:hover {
+        background-color: #e0e0e0;
+      }
+
+      .reaction-item.own-reaction {
+        border-color: #4a6fa5;
+        background-color: #e3f2fd;
+      }
+
+      .reaction-emoji {
+        margin-right: 0.2rem;
+      }
+
+      .reaction-count {
+        font-size: 0.7rem;
+        color: #666;
+      }
+
+      .reaction-picker {
+        position: absolute;
+        background-color: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 0.5rem;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        display: none;
+        z-index: 100;
+        margin-top: 0.5rem;
+      }
+
+      .reaction-picker.show {
+        display: flex;
+        gap: 0.25rem;
+      }
+
+      .reaction-option {
+        font-size: 1.2rem;
+        padding: 0.3rem;
+        cursor: pointer;
+        border-radius: 4px;
+        transition: background-color 0.2s;
+      }
+
+      .reaction-option:hover {
+        background-color: #f0f0f0;
+      }
+
+      .message-container {
+        position: relative;
+        padding-bottom: 0.5rem;
+      }
+
+      .message-container:hover .reaction-picker {
+        display: flex;
+      }
+
+      /* Seen Styles */
+      .message-seen {
+        margin-top: 0.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        font-size: 0.8rem;
+        color: #666;
+      }
+
+      .seen-item {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.4rem;
+        background-color: #f8f9fa;
+        border-radius: 12px;
+        cursor: default;
+        transition: background-color 0.2s;
+      }
+
+      .seen-item:hover {
+        background-color: #e9ecef;
+      }
+
+      .seen-icon {
+        margin-right: 0.2rem;
+        font-size: 0.7rem;
+      }
+
+      .seen-count {
+        font-weight: 500;
+      }
+
+      .seen-users {
+        margin-left: 0.25rem;
+        font-size: 0.7rem;
+        color: #495057;
+      }
+
+      /* Reply Styles */
+      .message-reply-preview {
+        background-color: #f8f9fa;
+        border-left: 3px solid #4a6fa5;
+        border-radius: 4px;
+        padding: 0.5rem;
+        margin-bottom: 0.5rem;
+        font-size: 0.85rem;
+        color: #666;
+      }
+
+      .reply-preview-sender {
+        font-weight: bold;
+        color: #4a6fa5;
+        margin-right: 0.5rem;
+      }
+
+      .reply-preview-content {
+        font-style: italic;
+      }
+
+      .reply-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        background-color: transparent;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.8rem;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.2s;
+      }
+
+      .message-container:hover .reply-btn {
+        opacity: 1;
+      }
+
+      .reply-btn:hover {
+        background-color: #f0f0f0;
+      }
+
+      .reply-input-preview {
+        margin-bottom: 0.5rem;
+        padding: 0 1rem;
+      }
+
+      .reply-input-preview .reply-preview {
+        position: relative;
+        background-color: #f0f2f5;
+        border-left: 3px solid #4a6fa5;
+        padding: 0.5rem;
+        border-radius: 4px;
+        font-size: 0.9rem;
+      }
+
+      .reply-cancel-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        background: none;
+        border: none;
+        font-size: 1rem;
+        cursor: pointer;
+        color: #666;
+      }
+
+      .reply-cancel-btn:hover {
+        color: #333;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="header">
+      <h1>Simple Chat Client</h1>
+      <div class="user-info">
+        <span id="username">Loading...</span>
+        <div class="status-indicator" id="statusIndicator"></div>
+      </div>
+    </header>
+
+    <div class="main-container">
+      <div class="rooms-panel">
+        <div class="rooms-header">Rooms</div>
+        <div class="rooms-list" id="roomsList">
+          <!-- Rooms will be populated here -->
+        </div>
+        <button class="create-room-btn" id="createRoomBtn">
+          Create New Room
+        </button>
+      </div>
+
+      <div class="chat-area">
+        <div class="chat-header">
+          <div id="currentRoomName">Select a room to start chatting</div>
+        </div>
+        <div class="messages-container" id="messagesContainer">
+          <!-- Messages will be displayed here -->
+        </div>
+        <div id="replyPreviewContainer"></div>
+        <div class="message-input-container">
+          <input
+            type="text"
+            class="message-input"
+            id="messageInput"
+            placeholder="Type your message..."
+            disabled
+          />
+          <button class="send-btn" id="sendBtn" disabled>Send</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="connection-status" id="connectionStatus">
+      Connecting to server...
+    </div>
+
+    <!-- Create Room Modal -->
+    <div class="modal" id="createRoomModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Create New Room</h2>
+        </div>
+        <div class="form-group">
+          <label for="roomName">Room Name</label>
+          <input type="text" id="roomName" placeholder="Enter room name" />
+        </div>
+        <div class="form-group">
+          <label for="roomDescription">Description (optional)</label>
+          <input
+            type="text"
+            id="roomDescription"
+            placeholder="Enter room description"
+          />
+        </div>
+        <div class="modal-buttons">
+          <button class="btn btn-secondary" id="cancelCreateRoom">
+            Cancel
+          </button>
+          <button class="btn btn-primary" id="confirmCreateRoom">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Configuration
+      const API_BASE = "http://127.0.0.1:8080/api";
+      const WS_URL = "ws://127.0.0.1:8080/ws";
+
+      // State
+      let authKey = "";
+      let username = "";
+      let ws = null;
+      let currentRoomId = null;
+      let rooms = [];
+      // Thêm các biến mới để quản lý pending room connection
+      let pendingRoomId = null;
+      let pendingRoomName = null;
+      let isConnectingToRoom = false;
+
+      // Reply state management
+      let replyingTo = null; // { messageId, sender, content }
+      let replyMessageId = null; // ID of message being replied to
+      let isReplying = false; // Flag to track reply state
+
+      // Reaction state
+      const REACTION_EMOJIS = ["👍", "👎", "😄", "❤️", "😮", "😢"];
+      let userReactions = {}; // messageId -> Set of emojis user has reacted with
+
+      // Seen state management
+      let seenObserver = null;
+      let messagesMarkedAsSeen = new Set(); // Track messages already marked as seen by current user
+
+      // DOM Elements
+      const usernameEl = document.getElementById("username");
+      const statusIndicator = document.getElementById("statusIndicator");
+      const connectionStatus = document.getElementById("connectionStatus");
+      const roomsList = document.getElementById("roomsList");
+      const currentRoomName = document.getElementById("currentRoomName");
+      const messagesContainer = document.getElementById("messagesContainer");
+      const messageInput = document.getElementById("messageInput");
+      const sendBtn = document.getElementById("sendBtn");
+      const createRoomBtn = document.getElementById("createRoomBtn");
+      const createRoomModal = document.getElementById("createRoomModal");
+      const cancelCreateRoom = document.getElementById("cancelCreateRoom");
+      const confirmCreateRoom = document.getElementById("confirmCreateRoom");
+      const roomNameInput = document.getElementById("roomName");
+      const roomDescriptionInput = document.getElementById("roomDescription");
+
+      // Initialize Intersection Observer for seen tracking
+      function initializeSeenObserver() {
+        seenObserver = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                const messageId = entry.target.getAttribute("data-message-id");
+                if (messageId && !messagesMarkedAsSeen.has(messageId)) {
+                  markMessageAsSeen(messageId);
+                  messagesMarkedAsSeen.add(messageId);
+                }
+              }
+            });
+          },
+          {
+            threshold: 0.5, // Message is considered "seen" when 50% visible
+            root: messagesContainer,
+          }
+        );
+      }
+
+      // Mark message as seen via API
+      async function markMessageAsSeen(messageId) {
+        if (!messageId || !currentRoomId) return;
+
+        // Don't mark own messages as seen (backend handles this)
+        try {
+          const response = await fetch(
+            `${API_BASE}/rooms/${currentRoomId}/messages/${messageId}/seen`,
+            {
+              method: "PUT",
+              headers: {
+                "X-Auth-Key": authKey,
+                "X-Username": username,
+              },
+            }
+          );
+
+          if (!response.ok) {
+            console.error(
+              "Failed to mark message as seen:",
+              response.statusText
+            );
+          }
+        } catch (error) {
+          console.error("Error marking message as seen:", error);
+        }
+      }
+
+      // Initialize
+      function init() {
+        generateAuthKey();
+        connectWebSocket();
+        loadRooms();
+        setupEventListeners();
+        initializeSeenObserver();
+      }
+
+      // Generate random auth key and username
+      function generateAuthKey() {
+        authKey =
+          "auth-" +
+          Math.random().toString(36).substring(2, 15) +
+          Math.random().toString(36).substring(2, 15);
+        username = "user-" + Math.random().toString(36).substring(2, 8);
+        usernameEl.textContent = username;
+      }
+
+      // Connect to WebSocket
+      function connectWebSocket() {
+        updateConnectionStatus("connecting");
+
+        // Build WebSocket URL with query parameters instead of relying on headers
+        const wsUrlWithParams = `${WS_URL}?authKey=${encodeURIComponent(
+          authKey
+        )}&username=${encodeURIComponent(username)}`;
+        ws = new WebSocket(wsUrlWithParams);
+
+        ws.onopen = function () {
+          updateConnectionStatus("connected");
+          console.log("WebSocket connected");
+
+          // If there's a pending room connection, execute it now
+          if (pendingRoomId && isConnectingToRoom) {
+            executeJoinRoom(pendingRoomId, pendingRoomName);
+            pendingRoomId = null;
+            pendingRoomName = null;
+          }
+
+          // Send any pending messages after reconnection
+          if (window.pendingMessages && window.pendingMessages.length > 0) {
+            window.pendingMessages.forEach((msgData) => {
+              sendWebSocketMessage("send_message", msgData);
+            });
+            window.pendingMessages = [];
+            addSystemMessage("Connection restored. Pending messages sent.");
+          }
+        };
+
+        ws.onmessage = function (event) {
+          const message = JSON.parse(event.data);
+          handleWebSocketMessage(message);
+        };
+
+        ws.onclose = function () {
+          updateConnectionStatus("disconnected");
+          console.log("WebSocket disconnected");
+
+          // If we were connecting to a room, save it for reconnection
+          if (currentRoomId && !isConnectingToRoom) {
+            pendingRoomId = currentRoomId;
+            // Get room name from current display
+            pendingRoomName = currentRoomName.textContent
+              .replace("Select a room to start chatting", "")
+              .trim();
+            isConnectingToRoom = true;
+          }
+
+          // Try to reconnect after 3 seconds
+          setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = function (error) {
+          console.error("WebSocket error:", error);
+          updateConnectionStatus("disconnected");
+
+          // If we were trying to connect to a room, show error message
+          if (isConnectingToRoom && pendingRoomName) {
+            currentRoomName.textContent = `Failed to connect to ${pendingRoomName}. Retrying...`;
+          }
+        };
+      }
+
+      // Handle WebSocket messages
+      function handleWebSocketMessage(message) {
+        console.log("Received WebSocket message:", message);
+
+        switch (message.event) {
+          case "room_joined":
+            handleRoomJoined(message.data);
+            break;
+          case "user_joined":
+            handleUserJoined(message.data);
+            break;
+          case "user_left":
+            handleUserLeft(message.data);
+            break;
+          case "new_message":
+            handleNewMessage(message.data);
+            break;
+          case "reaction_updated":
+            handleReactionUpdated(message.data);
+            break;
+          case "seen_updated":
+            handleSeenUpdated(message.data);
+            break;
+          default:
+            console.log("Unknown message event:", message.event);
+        }
+      }
+
+      // Handle room joined event
+      function handleRoomJoined(data) {
+        console.log("Raw data received:", data);
+        console.log("Type of data:", typeof data);
+        const roomData = data; // Data is already parsed by WebSocket
+        console.log("Room data:", roomData);
+        currentRoomId = roomData.roomId;
+        currentRoomName.textContent = roomData.roomName;
+        messageInput.disabled = false;
+        sendBtn.disabled = false;
+        isConnectingToRoom = false;
+        pendingRoomId = null;
+        pendingRoomName = null;
+        loadMessages(currentRoomId);
+
+        // Reconnect seen observer after joining room
+        if (seenObserver) {
+          // Observe all existing messages
+          document
+            .querySelectorAll(".message[data-message-id]")
+            .forEach((messageEl) => {
+              const messageId = messageEl.getAttribute("data-message-id");
+              const isOwn = messageEl.classList.contains("own");
+              if (messageId && !isOwn) {
+                seenObserver.observe(messageEl);
+              }
+            });
+        }
+      }
+
+      // Handle user joined event
+      function handleUserJoined(data) {
+        const userData = data; // Data is already parsed by WebSocket
+        addSystemMessage(`${userData.username} joined the room`);
+      }
+
+      // Handle user left event
+      function handleUserLeft(data) {
+        const userData = data; // Data is already parsed by WebSocket
+        addSystemMessage(`${userData.username} left the room`);
+      }
+
+      // Handle new message event
+      function handleNewMessage(data) {
+        const messageData = data; // Data is already parsed by WebSocket
+        addMessage(
+          messageData.sender,
+          messageData.content,
+          messageData.timestamp,
+          messageData.sender === username,
+          messageData.id,
+          messageData.reactions || [],
+          messageData.seen || { count: 0, users: [] },
+          messageData.replyTo || null // NEW: pass reply information
+        );
+      }
+
+      // Handle reaction updated event
+      function handleReactionUpdated(data) {
+        const reactionData = data; // Data is already parsed by WebSocket
+        updateMessageReactions(
+          reactionData.messageId,
+          reactionData.emoji,
+          reactionData.count,
+          reactionData.reactors
+        );
+      }
+
+      // Handle seen updated event
+      function handleSeenUpdated(data) {
+        const seenData = data; // Data is already parsed by WebSocket
+        updateMessageSeen(seenData.messageId, seenData.count, seenData.users);
+      }
+
+      // Send WebSocket message
+      function sendWebSocketMessage(event, data) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const message = {
+            event: event,
+            data: data,
+          };
+          ws.send(JSON.stringify(message));
+        } else {
+          console.error("WebSocket is not connected");
+
+          // If trying to send a message while disconnected, show error
+          if (event === "send_message") {
+            addSystemMessage(
+              "Message not sent: Connection lost. Trying to reconnect..."
+            );
+
+            // Save the message to send after reconnection
+            if (!window.pendingMessages) {
+              window.pendingMessages = [];
+            }
+            window.pendingMessages.push(data);
+          }
+        }
+      }
+
+      // Load rooms from API
+      async function loadRooms() {
+        try {
+          const response = await fetch(`${API_BASE}/rooms`, {
+            headers: {
+              "X-Auth-Key": authKey,
+              "X-Username": username,
+            },
+          });
+
+          if (response.ok) {
+            rooms = await response.json();
+            renderRooms();
+          } else {
+            console.error("Failed to load rooms:", response.statusText);
+          }
+        } catch (error) {
+          console.error("Error loading rooms:", error);
+        }
+      }
+
+      // Render rooms list
+      function renderRooms() {
+        roomsList.innerHTML = "";
+
+        rooms.forEach((room) => {
+          const roomItem = document.createElement("div");
+          roomItem.className = "room-item";
+          roomItem.textContent = `${room.name} (${room.memberCount})`;
+          roomItem.onclick = () => joinRoom(room.id, room.name, roomItem);
+
+          if (room.id === currentRoomId) {
+            roomItem.classList.add("active");
+          }
+
+          roomsList.appendChild(roomItem);
+        });
+      }
+
+      // Join a room
+      function joinRoom(roomId, roomName, roomElement) {
+        if (currentRoomId === roomId) {
+          return; // Already in this room
+        }
+
+        // Update UI immediately for better UX
+        document.querySelectorAll(".room-item").forEach((item) => {
+          item.classList.remove("active");
+        });
+        if (roomElement) {
+          roomElement.classList.add("active");
+        }
+
+        // Disconnect seen observer when changing rooms
+        if (seenObserver) {
+          seenObserver.disconnect();
+          messagesMarkedAsSeen.clear();
+        }
+
+        // Check WebSocket connection status
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          // WebSocket is ready, join room immediately
+          executeJoinRoom(roomId, roomName);
+        } else {
+          // WebSocket is not ready, save as pending
+          pendingRoomId = roomId;
+          pendingRoomName = roomName;
+          isConnectingToRoom = true;
+
+          // Update UI to show connecting status
+          currentRoomName.textContent = `Connecting to ${roomName}...`;
+          messageInput.disabled = true;
+          sendBtn.disabled = true;
+
+          // If WebSocket is completely disconnected, try to reconnect
+          if (!ws || ws.readyState === WebSocket.CLOSED) {
+            connectWebSocket();
+          }
+        }
+      }
+
+      // Helper function to execute the actual room join
+      function executeJoinRoom(roomId, roomName) {
+        // Leave current room if any
+        if (currentRoomId) {
+          sendWebSocketMessage("leave_room", {});
+        }
+
+        // Join new room
+        sendWebSocketMessage("join_room", { roomId: roomId });
+
+        // Update UI
+        currentRoomName.textContent = roomName;
+        isConnectingToRoom = true;
+      }
+
+      // Load messages for current room
+      async function loadMessages(roomId) {
+        try {
+          const response = await fetch(`${API_BASE}/rooms/${roomId}/messages`, {
+            headers: {
+              "X-Auth-Key": authKey,
+              "X-Username": username,
+            },
+          });
+
+          if (response.ok) {
+            const messages = await response.json();
+            messagesContainer.innerHTML = "";
+            messages.forEach((message) => {
+              if (message.type === "system") {
+                addSystemMessage(message.content);
+              } else {
+                addMessage(
+                  message.sender,
+                  message.content,
+                  message.timestamp,
+                  message.sender === username,
+                  message.id,
+                  message.reactions || [],
+                  message.seen || { count: 0, users: [] },
+                  message.replyTo || null // NEW: pass reply information
+                );
+              }
+            });
+            scrollToBottom();
+          } else {
+            console.error("Failed to load messages:", response.statusText);
+          }
+        } catch (error) {
+          console.error("Error loading messages:", error);
+        }
+      }
+
+      // Add message to chat
+      function addMessage(
+        sender,
+        content,
+        timestamp,
+        isOwn = false,
+        messageId = null,
+        reactions = [],
+        seen = { count: 0, users: [] },
+        replyTo = null // NEW: reply information
+      ) {
+        const messageContainer = document.createElement("div");
+        messageContainer.className = `message-container`;
+
+        const messageDiv = document.createElement("div");
+        messageDiv.className = `message ${isOwn ? "own" : ""}`;
+        messageDiv.setAttribute("data-message-id", messageId);
+
+        const time = new Date(timestamp).toLocaleTimeString();
+
+        // Build message HTML with reply preview
+        let messageHTML = `
+                <div class="message-info">${sender} • ${time}</div>
+        `;
+
+        // Add reply preview if exists
+        if (replyTo && replyTo.id) {
+          messageHTML += `
+                <div class="message-reply-preview">
+                  <span class="reply-preview-sender">Replying to ${
+                    replyTo.sender
+                  }</span>
+                  <div class="reply-preview-content">${escapeHtml(
+                    replyTo.content
+                  )}</div>
+                </div>
+          `;
+        }
+
+        messageHTML += `
+                <div class="message-content">${escapeHtml(content)}</div>
+                <div class="message-reactions"></div>
+                <div class="message-seen"></div>
+                <div class="reaction-picker">
+                    ${REACTION_EMOJIS.map(
+                      (emoji) =>
+                        `<span class="reaction-option" data-emoji="${emoji}">${emoji}</span>`
+                    ).join("")}
+                </div>
+            `;
+
+        messageDiv.innerHTML = messageHTML;
+
+        messageContainer.appendChild(messageDiv);
+
+        // Add reply button
+        const replyBtn = document.createElement("button");
+        replyBtn.className = "reply-btn";
+        replyBtn.textContent = "Reply";
+        replyBtn.onclick = () => startReply(messageId, sender, content);
+        messageDiv.appendChild(replyBtn);
+
+        messagesContainer.appendChild(messageContainer);
+
+        // Initialize reactions if provided
+        if (reactions && reactions.length > 0) {
+          reactions.forEach((reaction) => {
+            updateMessageReactions(
+              messageId,
+              reaction.emoji,
+              reaction.count,
+              reaction.reactors
+            );
+          });
+        }
+
+        // Initialize seen information if provided
+        if (seen && (seen.count > 0 || seen.users.length > 0)) {
+          updateMessageSeen(messageId, seen.count, seen.users);
+        }
+
+        // Add event listeners for reaction picker
+        const reactionOptions = messageDiv.querySelectorAll(".reaction-option");
+        reactionOptions.forEach((option) => {
+          option.addEventListener("click", () => {
+            const emoji = option.getAttribute("data-emoji");
+            toggleReaction(messageId, emoji);
+          });
+        });
+
+        // Start observing new message for seen tracking
+        if (seenObserver && messageId && !isOwn) {
+          seenObserver.observe(messageDiv);
+        }
+
+        scrollToBottom();
+      }
+
+      // Add system message
+      function addSystemMessage(content) {
+        const messageDiv = document.createElement("div");
+        messageDiv.className = "message system";
+        messageDiv.textContent = content;
+
+        messagesContainer.appendChild(messageDiv);
+        scrollToBottom();
+      }
+
+      // Send message
+      function sendMessage() {
+        const content = messageInput.value.trim();
+        if (content && currentRoomId) {
+          const messageData = {
+            roomId: currentRoomId,
+            content: content,
+          };
+
+          // Add replyTo if replying
+          if (isReplying && replyMessageId) {
+            messageData.replyTo = replyMessageId;
+          }
+
+          sendWebSocketMessage("send_message", messageData);
+          messageInput.value = "";
+
+          // Clear reply state after sending
+          if (isReplying) {
+            cancelReply();
+          }
+        } else if (!currentRoomId) {
+          addSystemMessage("Please select a room first");
+        }
+      }
+
+      // Create new room
+      async function createRoom() {
+        const name = roomNameInput.value.trim();
+        const description = roomDescriptionInput.value.trim();
+
+        if (!name) {
+          alert("Room name is required");
+          return;
+        }
+
+        try {
+          const response = await fetch(`${API_BASE}/rooms`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Auth-Key": authKey,
+              "X-Username": username,
+            },
+            body: JSON.stringify({
+              name: name,
+              description: description,
+            }),
+          });
+
+          if (response.ok) {
+            const room = await response.json();
+            rooms.push(room);
+            renderRooms();
+            hideCreateRoomModal();
+            roomNameInput.value = "";
+            roomDescriptionInput.value = "";
+          } else {
+            console.error("Failed to create room:", response.statusText);
+            alert("Failed to create room");
+          }
+        } catch (error) {
+          console.error("Error creating room:", error);
+          alert("Error creating room");
+        }
+      }
+
+      // Update connection status
+      function updateConnectionStatus(status) {
+        statusIndicator.className = `status-indicator ${status}`;
+        connectionStatus.className = `connection-status ${status}`;
+
+        switch (status) {
+          case "connected":
+            connectionStatus.textContent = "Connected to server";
+            break;
+          case "disconnected":
+            connectionStatus.textContent = "Disconnected from server";
+            break;
+          case "connecting":
+            connectionStatus.textContent = "Connecting to server...";
+            break;
+        }
+      }
+
+      // Show/hide create room modal
+      function showCreateRoomModal() {
+        createRoomModal.style.display = "block";
+      }
+
+      function hideCreateRoomModal() {
+        createRoomModal.style.display = "none";
+      }
+
+      // Reaction functions
+      function toggleReaction(messageId, emoji) {
+        if (!messageId || !emoji) return;
+
+        // Initialize user reactions for this message if not exists
+        if (!userReactions[messageId]) {
+          userReactions[messageId] = new Set();
+        }
+
+        // Check if user has already reacted with this emoji
+        const hasReacted = userReactions[messageId].has(emoji);
+
+        // Send toggle reaction to server
+        sendWebSocketMessage("toggle_reaction", {
+          roomId: currentRoomId,
+          messageId: messageId,
+          emoji: emoji,
+        });
+
+        // Update local state optimistically
+        if (hasReacted) {
+          userReactions[messageId].delete(emoji);
+        } else {
+          userReactions[messageId].add(emoji);
+        }
+      }
+
+      function updateMessageReactions(messageId, emoji, count, reactors) {
+        if (!messageId) return;
+
+        // Find the message element
+        const messageElement = document.querySelector(
+          `[data-message-id="${messageId}"]`
+        );
+        if (!messageElement) return;
+
+        // Find or create reactions container
+        let reactionsContainer =
+          messageElement.querySelector(".message-reactions");
+        if (!reactionsContainer) return;
+
+        // Find existing reaction element for this emoji
+        let reactionElement = reactionsContainer.querySelector(
+          `[data-emoji="${emoji}"]`
+        );
+
+        // Initialize user reactions for this message if not exists
+        if (!userReactions[messageId]) {
+          userReactions[messageId] = new Set();
+        }
+
+        // Update user's reaction state based on reactors
+        const hasReacted = reactors && reactors.includes(username);
+        if (hasReacted) {
+          userReactions[messageId].add(emoji);
+        } else {
+          userReactions[messageId].delete(emoji);
+        }
+
+        if (count > 0) {
+          // Create or update reaction element
+          if (!reactionElement) {
+            reactionElement = document.createElement("div");
+            reactionElement.className = "reaction-item";
+            reactionElement.setAttribute("data-emoji", emoji);
+            reactionElement.addEventListener("click", () => {
+              toggleReaction(messageId, emoji);
+            });
+            reactionsContainer.appendChild(reactionElement);
+          }
+
+          // Update reaction content and styling
+          const isOwnReaction = userReactions[messageId].has(emoji);
+          reactionElement.className = `reaction-item ${
+            isOwnReaction ? "own-reaction" : ""
+          }`;
+          reactionElement.innerHTML = `
+            <span class="reaction-emoji">${emoji}</span>
+            <span class="reaction-count">${count}</span>
+          `;
+        } else if (reactionElement) {
+          // Remove reaction element if count is 0
+          reactionElement.remove();
+        }
+      }
+
+      function updateMessageSeen(messageId, count, users) {
+        if (!messageId) return;
+
+        // Find the message element
+        const messageElement = document.querySelector(
+          `[data-message-id="${messageId}"]`
+        );
+        if (!messageElement) return;
+
+        // Find or create seen container
+        let seenContainer = messageElement.querySelector(".message-seen");
+        if (!seenContainer) return;
+
+        // Clear existing seen content
+        seenContainer.innerHTML = "";
+
+        if (count > 0) {
+          const seenItem = document.createElement("div");
+          seenItem.className = "seen-item";
+
+          const userCount = users.length;
+          const displayText =
+            userCount <= 3
+              ? users.join(", ")
+              : `${users.slice(0, 2).join(", ")} +${userCount - 2} others`;
+
+          seenItem.innerHTML = `
+            <span class="seen-icon">👁️</span>
+            <span class="seen-count">${count}</span>
+            <span class="seen-users">${displayText}</span>
+          `;
+
+          seenContainer.appendChild(seenItem);
+        }
+      }
+
+      // Reply functionality functions
+      function startReply(messageId, sender, content) {
+        replyingTo = { messageId, sender, content };
+        replyMessageId = messageId;
+        isReplying = true;
+
+        // Update message input placeholder
+        messageInput.placeholder = `Replying to ${sender}...`;
+
+        // Show reply preview in input area
+        showReplyPreview();
+
+        // Focus on input
+        messageInput.focus();
+      }
+
+      function showReplyPreview() {
+        if (!isReplying || !replyingTo) return;
+
+        // Remove existing reply preview if any
+        const existingPreview = document.querySelector(".reply-input-preview");
+        if (existingPreview) {
+          existingPreview.remove();
+        }
+
+        // Create reply preview element
+        const replyPreview = document.createElement("div");
+        replyPreview.className = "reply-input-preview";
+        replyPreview.innerHTML = `
+          <div class="reply-preview">
+            <span class="reply-preview-sender">Replying to ${
+              replyingTo.sender
+            }</span>
+            <div class="reply-preview-content">${escapeHtml(
+              replyingTo.content
+            )}</div>
+            <button class="reply-cancel-btn" onclick="cancelReply()">✕</button>
+          </div>
+        `;
+
+        // Insert before message input container
+        const inputContainer = document.querySelector(
+          ".message-input-container"
+        );
+        inputContainer.parentNode.insertBefore(replyPreview, inputContainer);
+      }
+
+      function cancelReply() {
+        replyingTo = null;
+        replyMessageId = null;
+        isReplying = false;
+
+        // Reset placeholder
+        messageInput.placeholder = "Type your message...";
+
+        // Remove reply preview
+        const replyPreview = document.querySelector(".reply-input-preview");
+        if (replyPreview) {
+          replyPreview.remove();
+        }
+
+        // Focus on input
+        messageInput.focus();
+      }
+
+      // Utility functions
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      function scrollToBottom() {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+
+      // Setup event listeners
+      function setupEventListeners() {
+        // Send message
+        sendBtn.addEventListener("click", sendMessage);
+        messageInput.addEventListener("keypress", (e) => {
+          if (e.key === "Enter") {
+            sendMessage();
+          }
+        });
+
+        // Create room
+        createRoomBtn.addEventListener("click", showCreateRoomModal);
+        confirmCreateRoom.addEventListener("click", createRoom);
+        cancelCreateRoom.addEventListener("click", hideCreateRoomModal);
+
+        // Close modal when clicking outside
+        window.addEventListener("click", (e) => {
+          if (e.target === createRoomModal) {
+            hideCreateRoomModal();
+          }
+        });
+      }
+
+      // Initialize the app when DOM is loaded
+      document.addEventListener("DOMContentLoaded", init);
+    </script>
+  </body>
+</html>
