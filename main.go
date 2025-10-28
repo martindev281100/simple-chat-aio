@@ -40,6 +40,9 @@ type Message struct {
 
 	// NEW: id of the message this one replies to (if any)
 	ReplyToID string `json:"replyTo,omitempty"`
+
+	// NEW: id of the thread this message belongs to (if any)
+	ThreadID string `json:"threadId,omitempty"`
 }
 
 type Room struct {
@@ -53,6 +56,21 @@ type Room struct {
 	conns       map[*wsConn]bool `json:"-"`
 	mu          sync.RWMutex     `json:"-"`
 	maxHist     int              `json:"-"`
+}
+
+// Thread represents a Discord-style thread within a room
+type Thread struct {
+	ID            string           `json:"id"`
+	RoomID        string           `json:"roomId"`
+	Name          string           `json:"name"`
+	RootMessageID string           `json:"rootMessageId,omitempty"` // the message this thread was started from (optional)
+	CreatedBy     string           `json:"createdBy"`
+	CreatedAt     time.Time        `json:"createdAt"`
+	Members       map[string]bool  `json:"-"`
+	Messages      []Message        `json:"-"`
+	conns         map[*wsConn]bool `json:"-"`
+	mu            sync.RWMutex     `json:"-"`
+	maxHist       int              `json:"-"`
 }
 
 type wsEnvelope struct {
@@ -81,15 +99,17 @@ type replyPreview struct {
  *  In-Memory Store
  ***************/
 type Store struct {
-	users map[string]*User
-	rooms map[string]*Room
-	mu    sync.RWMutex
+	users   map[string]*User
+	rooms   map[string]*Room
+	threads map[string]*Thread // NEW
+	mu      sync.RWMutex
 }
 
 func NewStore() *Store {
 	return &Store{
-		users: make(map[string]*User),
-		rooms: make(map[string]*Room),
+		users:   make(map[string]*User),
+		rooms:   make(map[string]*Room),
+		threads: make(map[string]*Thread), // NEW
 	}
 }
 
@@ -172,6 +192,68 @@ func (s *Store) getRoom(id string) (*Room, bool) {
 	defer s.mu.RUnlock()
 	r, ok := s.rooms[id]
 	return r, ok
+}
+
+// createThread creates a new thread in a room, optionally from a root message
+func (s *Store) createThread(roomID, name, createdBy, rootMessageID string) (*Thread, error) {
+	s.mu.RLock()
+	room, ok := s.rooms[roomID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, errors.New("room not found")
+	}
+
+	th := &Thread{
+		ID:        "thr-" + shortID(),
+		RoomID:    roomID,
+		Name:      firstNonEmpty(strings.TrimSpace(name), "Thread-"+shortID()),
+		CreatedBy: createdBy,
+		CreatedAt: time.Now(),
+		Members:   map[string]bool{},
+		Messages:  []Message{},
+		conns:     map[*wsConn]bool{},
+		maxHist:   200,
+	}
+
+	// If created from a message, verify it exists and annotate it with ThreadID
+	if strings.TrimSpace(rootMessageID) != "" {
+		room.mu.Lock()
+		msg := (&app{}).findMessage(room, rootMessageID)
+		if msg == nil {
+			room.mu.Unlock()
+			return nil, errors.New("root message not found")
+		}
+		th.RootMessageID = rootMessageID
+		// Mark the root message as having a thread pointer
+		msg.ThreadID = th.ID
+		room.mu.Unlock()
+	}
+
+	s.mu.Lock()
+	s.threads[th.ID] = th
+	s.mu.Unlock()
+	return th, nil
+}
+
+// getThread retrieves a thread by ID
+func (s *Store) getThread(threadID string) (*Thread, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	th, ok := s.threads[threadID]
+	return th, ok
+}
+
+// listThreads returns all threads in a room
+func (s *Store) listThreads(roomID string) []*Thread {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []*Thread{}
+	for _, th := range s.threads {
+		if th.RoomID == roomID {
+			out = append(out, th)
+		}
+	}
+	return out
 }
 
 /***************
@@ -688,6 +770,148 @@ func (a *app) removeReactionHTTP(c *gin.Context) {
 	})
 }
 
+// --- Threads (HTTP)
+func (a *app) listThreads(c *gin.Context) {
+	roomID := c.Param("roomId")
+	ths := a.store.listThreads(roomID)
+	type item struct {
+		ID            string    `json:"id"`
+		RoomID        string    `json:"roomId"`
+		Name          string    `json:"name"`
+		RootMessageID string    `json:"rootMessageId,omitempty"`
+		CreatedBy     string    `json:"createdBy"`
+		CreatedAt     time.Time `json:"createdAt"`
+		MemberCount   int       `json:"memberCount"`
+	}
+	out := make([]item, 0, len(ths))
+	for _, th := range ths {
+		th.mu.RLock()
+		out = append(out, item{
+			ID:            th.ID,
+			RoomID:        th.RoomID,
+			Name:          th.Name,
+			RootMessageID: th.RootMessageID,
+			CreatedBy:     th.CreatedBy,
+			CreatedAt:     th.CreatedAt,
+			MemberCount:   len(th.Members),
+		})
+		th.mu.RUnlock()
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (a *app) createThreadHTTP(c *gin.Context) {
+	u := getUser(c)
+	roomID := c.Param("roomId")
+	var p struct {
+		Name          string `json:"name"`
+		RootMessageID string `json:"rootMessageId"` // optional
+	}
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad json"})
+		return
+	}
+	th, err := a.store.createThread(roomID, p.Name, u.AuthKey, strings.TrimSpace(p.RootMessageID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Broadcast to room
+	if room, ok := a.store.getRoom(roomID); ok {
+		payload, _ := json.Marshal(map[string]any{
+			"threadId":      th.ID,
+			"roomId":        th.RoomID,
+			"name":          th.Name,
+			"rootMessageId": th.RootMessageID,
+			"createdBy":     a.store.username(u.AuthKey),
+			"createdAt":     th.CreatedAt,
+		})
+		a.broadcast(room, wsEnvelope{Event: "new_thread", Data: payload}, nil)
+	}
+	c.JSON(http.StatusOK, th)
+}
+
+func (a *app) getThread(c *gin.Context) {
+	threadID := c.Param("threadId")
+	th, ok := a.store.getThread(threadID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "thread not found"})
+		return
+	}
+	th.mu.RLock()
+	defer th.mu.RUnlock()
+	c.JSON(http.StatusOK, gin.H{
+		"id":            th.ID,
+		"roomId":        th.RoomID,
+		"name":          th.Name,
+		"rootMessageId": th.RootMessageID,
+		"createdBy":     th.CreatedBy,
+		"createdAt":     th.CreatedAt,
+		"memberCount":   len(th.Members),
+	})
+}
+
+func (a *app) getThreadMessages(c *gin.Context) {
+	threadID := c.Param("threadId")
+	th, ok := a.store.getThread(threadID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "thread not found"})
+		return
+	}
+	limit := clamp(parseInt(c.Query("limit"), 50), 1, 200)
+	offset := clamp(parseInt(c.Query("offset"), 0), 0, 100000)
+
+	type messageResp struct {
+		ID        string         `json:"id"`
+		RoomID    string         `json:"roomId"`
+		ThreadID  string         `json:"threadId"`
+		Sender    string         `json:"sender"`
+		Content   string         `json:"content"`
+		Timestamp time.Time      `json:"timestamp"`
+		Type      string         `json:"type"`
+		Reactions []reactionResp `json:"reactions,omitempty"`
+		Seen      seenSummary    `json:"seen"`
+		ReplyTo   *replyPreview  `json:"replyTo,omitempty"`
+	}
+
+	th.mu.RLock()
+	defer th.mu.RUnlock()
+
+	n := len(th.Messages)
+	start := offset
+	if start > n {
+		start = n
+	}
+	end := start + limit
+	if end > n {
+		end = n
+	}
+
+	out := make([]messageResp, 0, end-start)
+	for i := start; i < end; i++ {
+		m := &th.Messages[i]
+		var rp *replyPreview
+		if m.ReplyToID != "" {
+			// look up within thread
+			rp = a.makeReplyPreviewForThread(th, a.findThreadMessage(th, m.ReplyToID))
+		}
+		out = append(out, messageResp{
+			ID:        m.ID,
+			RoomID:    m.RoomID,
+			ThreadID:  m.ThreadID,
+			Sender:    m.SenderAuthKey,
+			Content:   m.Content,
+			Timestamp: m.Timestamp,
+			Type:      m.Type,
+			Reactions: a.summarizeReactions(m),
+			Seen:      a.summarizeSeen(m),
+			ReplyTo:   rp,
+		})
+	}
+	c.JSON(http.StatusOK, out)
+}
+
 // --- Seen (HTTP)
 func (a *app) markSeenHTTP(c *gin.Context) {
 	u := getUser(c)
@@ -725,6 +949,7 @@ type wsConn struct {
 	authKey  string
 	username string
 	roomID   string
+	threadID string // NEW
 	app      *app
 }
 
@@ -830,6 +1055,40 @@ func (c *wsConn) readLoop() {
 				continue
 			}
 			c.handleMarkSeen(p.RoomID, p.MessageID)
+		case "create_thread":
+			// create a new thread (optionally from a message)
+			var p struct {
+				RoomID        string `json:"roomId"`
+				Name          string `json:"name"`
+				RootMessageID string `json:"rootMessageId"` // optional
+			}
+			if err := json.Unmarshal(env.Data, &p); err != nil {
+				c.sendError("create_thread_error", "bad json")
+				continue
+			}
+			c.handleCreateThread(p.RoomID, strings.TrimSpace(p.Name), strings.TrimSpace(p.RootMessageID))
+		case "join_thread":
+			var p struct {
+				ThreadID string `json:"threadId"`
+			}
+			if err := json.Unmarshal(env.Data, &p); err != nil || strings.TrimSpace(p.ThreadID) == "" {
+				c.sendError("join_thread_error", "threadId required")
+				continue
+			}
+			c.joinThread(strings.TrimSpace(p.ThreadID))
+		case "leave_thread":
+			c.leaveThread()
+		case "send_thread_message":
+			var p struct {
+				ThreadID string `json:"threadId"`
+				Content  string `json:"content"`
+				ReplyTo  string `json:"replyTo"`
+			}
+			if err := json.Unmarshal(env.Data, &p); err != nil {
+				c.sendError("send_thread_message_error", "bad json")
+				continue
+			}
+			c.handleSendThreadMessage(strings.TrimSpace(p.ThreadID), strings.TrimSpace(p.Content), strings.TrimSpace(p.ReplyTo))
 		default:
 			c.sendError("unknown_event", "unsupported event: "+env.Event)
 		}
@@ -1045,6 +1304,205 @@ func (c *wsConn) handleMarkSeen(roomID, messageID string) {
 	}
 }
 
+// handleCreateThread processes thread creation requests
+func (c *wsConn) handleCreateThread(roomID, name, rootMessageID string) {
+	// ensure user is (or becomes) in room
+	if c.roomID == "" || c.roomID != roomID {
+		c.joinRoom(roomID)
+		if c.roomID != roomID {
+			return
+		}
+	}
+	th, err := c.app.store.createThread(roomID, name, c.authKey, rootMessageID)
+	if err != nil {
+		c.sendError("create_thread_error", err.Error())
+		return
+	}
+
+	// broadcast to room: new thread created
+	payload, _ := json.Marshal(map[string]any{
+		"threadId":      th.ID,
+		"roomId":        th.RoomID,
+		"name":          th.Name,
+		"rootMessageId": th.RootMessageID,
+		"createdBy":     c.username,
+		"createdAt":     th.CreatedAt,
+	})
+	room, _ := c.app.store.getRoom(roomID)
+	c.app.broadcast(room, wsEnvelope{Event: "new_thread", Data: payload}, nil)
+
+	// Optionally, auto-join creator into the thread
+	c.joinThread(th.ID)
+}
+
+// joinThread joins a user to a thread
+func (c *wsConn) joinThread(threadID string) {
+	th, ok := c.app.store.getThread(threadID)
+	if !ok {
+		c.sendError("join_thread_error", "thread not found")
+		return
+	}
+	// ensure in parent room
+	if c.roomID == "" || c.roomID != th.RoomID {
+		c.joinRoom(th.RoomID)
+		if c.roomID != th.RoomID {
+			return
+		}
+	}
+
+	th.mu.Lock()
+	th.Members[c.authKey] = true
+	th.conns[c] = true
+	c.threadID = th.ID
+	online := c.app.threadOnlineUsernames(th)
+	name := th.Name
+	th.mu.Unlock()
+
+	data := map[string]any{
+		"threadId":    th.ID,
+		"threadName":  name,
+		"roomId":      th.RoomID,
+		"onlineUsers": online,
+	}
+	jd, _ := json.Marshal(data)
+	c.sendJSON(wsEnvelope{Event: "thread_joined", Data: jd})
+
+	announce, _ := json.Marshal(map[string]string{"threadId": th.ID, "username": c.username})
+	c.app.broadcastThread(th, wsEnvelope{Event: "user_joined_thread", Data: announce}, skipConn(c))
+}
+
+// leaveThread removes user from current thread
+func (c *wsConn) leaveThread() {
+	if c.threadID == "" {
+		return
+	}
+	th, ok := c.app.store.getThread(c.threadID)
+	if !ok {
+		c.threadID = ""
+		return
+	}
+	th.mu.Lock()
+	delete(th.conns, c)
+	delete(th.Members, c.authKey)
+	id := th.ID
+	th.mu.Unlock()
+
+	data := map[string]string{"threadId": id}
+	jd, _ := json.Marshal(data)
+	c.app.broadcastThread(th, wsEnvelope{Event: "user_left_thread", Data: jd}, nil)
+	c.threadID = ""
+}
+
+// handleSendThreadMessage processes messages sent to threads
+func (c *wsConn) handleSendThreadMessage(threadID, content, replyTo string) {
+	if content == "" {
+		c.sendError("send_thread_message_error", "content required")
+		return
+	}
+	th, ok := c.app.store.getThread(threadID)
+	if !ok {
+		c.sendError("send_thread_message_error", "thread not found")
+		return
+	}
+	// auto-join if needed
+	if c.threadID == "" || c.threadID != threadID {
+		c.joinThread(threadID)
+		if c.threadID != threadID {
+			return
+		}
+	}
+	// Validate reply target within thread if provided
+	var rp *replyPreview
+	if replyTo != "" {
+		th.mu.RLock()
+		target := c.app.findThreadMessage(th, replyTo)
+		if target == nil {
+			th.mu.RUnlock()
+			c.sendError("send_thread_message_error", "replyTo message not found in this thread")
+			return
+		}
+		rp = c.app.makeReplyPreviewForThread(th, target)
+		th.mu.RUnlock()
+	}
+
+	msg := Message{
+		ID:            "msg-" + shortID(),
+		RoomID:        th.RoomID,
+		ThreadID:      th.ID,
+		SenderAuthKey: c.authKey,
+		Content:       content,
+		Timestamp:     time.Now(),
+		Type:          "text",
+		Seen:          SeenState{c.authKey: time.Now()},
+		ReplyToID:     replyTo,
+	}
+
+	th.mu.Lock()
+	th.Messages = append(th.Messages, msg)
+	if len(th.Messages) > th.maxHist {
+		th.Messages = th.Messages[len(th.Messages)-th.maxHist:]
+	}
+	th.mu.Unlock()
+
+	payload, _ := json.Marshal(map[string]any{
+		"id":        msg.ID,
+		"roomId":    msg.RoomID,
+		"threadId":  msg.ThreadID,
+		"sender":    c.username,
+		"content":   msg.Content,
+		"timestamp": msg.Timestamp,
+		"reactions": []reactionResp{},
+		"seen":      seenSummary{Count: 1, Users: []string{c.username}},
+		"replyTo":   rp,
+	})
+	c.app.broadcastThread(th, wsEnvelope{Event: "new_thread_message", Data: payload}, nil)
+}
+
+// threadOnlineUsernames returns online usernames in a thread
+func (a *app) threadOnlineUsernames(th *Thread) []string {
+	names := []string{}
+	for c := range th.conns {
+		names = append(names, c.username)
+	}
+	return names
+}
+
+// broadcastThread sends a message to all connections in a thread
+func (a *app) broadcastThread(th *Thread, env wsEnvelope, skip func(*wsConn) bool) {
+	th.mu.RLock()
+	defer th.mu.RUnlock()
+	for conn := range th.conns {
+		if skip != nil && skip(conn) {
+			continue
+		}
+		conn.sendJSON(env)
+	}
+}
+
+// findThreadMessage finds a message within a thread by ID
+func (a *app) findThreadMessage(th *Thread, messageID string) *Message {
+	for i := range th.Messages {
+		if th.Messages[i].ID == messageID {
+			return &th.Messages[i]
+		}
+	}
+	return nil
+}
+
+// makeReplyPreviewForThread creates a reply preview for thread messages
+func (a *app) makeReplyPreviewForThread(th *Thread, m *Message) *replyPreview {
+	if m == nil {
+		return nil
+	}
+	return &replyPreview{
+		ID:        m.ID,
+		Sender:    a.store.username(m.SenderAuthKey),
+		Content:   trimRunes(m.Content, 120),
+		Timestamp: m.Timestamp,
+		Type:      m.Type,
+	}
+}
+
 func (c *wsConn) sendJSON(v any) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -1060,6 +1518,9 @@ func (c *wsConn) sendError(code, message string) {
 }
 
 func (c *wsConn) cleanup() {
+	if c.threadID != "" {
+		c.leaveThread()
+	}
 	if c.roomID != "" {
 		c.leaveRoom()
 	}
@@ -1206,6 +1667,12 @@ func main() {
 
 		// Seen
 		api.PUT("/rooms/:roomId/messages/:messageId/seen", app.markSeenHTTP)
+
+		// Threads
+		api.GET("/rooms/:roomId/threads", app.listThreads)
+		api.POST("/rooms/:roomId/threads", app.createThreadHTTP)
+		api.GET("/threads/:threadId", app.getThread)
+		api.GET("/threads/:threadId/messages", app.getThreadMessages)
 	}
 
 	// WebSocket (also protected by auth)
